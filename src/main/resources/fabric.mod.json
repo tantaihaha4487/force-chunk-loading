@@ -4,14 +4,16 @@
   "version": "${version}",
 
   "name": "Force Chunk Loading",
-  "description": "A Fabric mod: Force Chunk Loading",
-  "authors": [],
+  "description": "A server-only, craftable Earth-textured player head that keeps its chunk loaded.",
+  "authors": ["Thanachot"],
   "contact": {},
 
   "license": "MIT",
-  "icon": "assets/force_chunk_loading/icon.png",
 
   "environment": "server",
+  "mixins": [
+    "force_chunk_loading.mixins.json"
+  ],
   "entrypoints": {
     "main": [
       "com.tantaihaha.forcechunkloading.force_chunk_loading.ForceChunkLoading"
