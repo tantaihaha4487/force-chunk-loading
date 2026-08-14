@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "force_chunk_loading",
+  "version": "${version}",
+
+  "name": "Force Chunk Loading",
+  "description": "A Fabric mod: Force Chunk Loading",
+  "authors": [],
+  "contact": {},
+
+  "license": "MIT",
+  "icon": "assets/force_chunk_loading/icon.png",
+
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.tantaihaha.forcechunkloading.force_chunk_loading.ForceChunkLoading"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "java": ">=25",
+    "fabric-api": "*",
+
+    "minecraft": "~${minecraft_version}"
+  }
+}

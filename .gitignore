@@ -1,0 +1,20 @@
+# Build outputs and local tooling
+.gradle/
+build/
+out/
+run/
+
+# Agent/context files — intentionally not tracked
+.agents/
+AGENTS.md
+CLAUDE.md
+.codex/
+.claude/
+.opencode/
+.cursor/
+
+# Local IDE/OS files
+.idea/
+*.iml
+.vscode/
+.DS_Store
