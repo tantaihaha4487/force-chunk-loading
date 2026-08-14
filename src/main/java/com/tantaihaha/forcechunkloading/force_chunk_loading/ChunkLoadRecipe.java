@@ -75,7 +75,7 @@ public final class ChunkLoadRecipe {
             }
 
             ShapedRecipePattern pattern = ShapedRecipePattern.of(key, config.pattern);
-            ItemStackTemplate result = ItemStackTemplate.fromNonEmptyStack(ChunkLoadService.createMarkerStack());
+            ItemStackTemplate result = ChunkLoadService.createMarkerTemplate();
             return new ShapedRecipe(
                     new Recipe.CommonInfo(true),
                     new CraftingRecipe.CraftingBookInfo(CraftingBookCategory.MISC, ForceChunkLoading.MOD_ID),

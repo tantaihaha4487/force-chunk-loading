@@ -12,12 +12,14 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.ItemStackTemplate;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.ResolvableProfile;
@@ -96,10 +98,20 @@ public final class ChunkLoadService {
 
     public static ItemStack createMarkerStack() {
         ItemStack stack = new ItemStack(Items.PLAYER_HEAD);
-        stack.set(DataComponents.CUSTOM_NAME, Component.literal("Chunk load"));
-        stack.set(DataComponents.PROFILE, earthProfile());
-        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(markerTag()));
+        stack.applyComponents(markerComponents());
         return stack;
+    }
+
+    static ItemStackTemplate createMarkerTemplate() {
+        return new ItemStackTemplate(Items.PLAYER_HEAD, markerComponents());
+    }
+
+    private static DataComponentPatch markerComponents() {
+        return DataComponentPatch.builder()
+                .set(DataComponents.CUSTOM_NAME, Component.literal("Chunk load"))
+                .set(DataComponents.PROFILE, earthProfile())
+                .set(DataComponents.CUSTOM_DATA, CustomData.of(markerTag()))
+                .build();
     }
 
     public static boolean isMarkerItem(ItemStack stack) {
