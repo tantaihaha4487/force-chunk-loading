@@ -1,0 +1,82 @@
+name: Manual Release Force Chunk Loading
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: Optional release notes
+        required: false
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Build mod
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon
+
+      - name: Read mod version
+        id: mod_version
+        shell: bash
+        run: |
+          VERSION="$(awk -F= '$1 ~ /^[[:space:]]*mod_version[[:space:]]*$/ { gsub(/[[:space:]]/, "", $2); print $2 }' gradle.properties)"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Find mod JAR
+        id: mod_jar
+        shell: bash
+        run: |
+          JAR_PATH="$(find build/libs -maxdepth 1 -type f -name '*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort | head -n 1)"
+          test -n "$JAR_PATH"
+          echo "path=$JAR_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGELOG: ${{ inputs.changelog }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          VERSION: ${{ steps.mod_version.outputs.version }}
+          JAR_PATH: ${{ steps.mod_jar.outputs.path }}
+        shell: bash
+        run: |
+          RELEASE_ARGS=(
+            "v${VERSION}"
+            "$JAR_PATH"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "Force Chunk Loading v${VERSION}"
+          )
+
+          if [[ -n "$CHANGELOG" ]]; then
+            RELEASE_ARGS+=(--notes "$CHANGELOG")
+          else
+            RELEASE_ARGS+=(--generate-notes)
+          fi
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+
+          gh release create "${RELEASE_ARGS[@]}"
