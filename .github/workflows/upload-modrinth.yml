@@ -1,0 +1,77 @@
+name: Manual Upload to Modrinth
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: Changelog for this Modrinth version
+        required: false
+        type: string
+      release_type:
+        description: Modrinth release channel
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - beta
+          - alpha
+      game_version:
+        description: Minecraft version supported by this build
+        required: true
+        default: 26.1.2
+        type: choice
+        options:
+          - 26.1.2
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Build mod
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon
+
+      - name: Find mod JAR
+        id: mod_jar
+        shell: bash
+        run: |
+          JAR_PATH="$(find build/libs -maxdepth 1 -type f -name '*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort | head -n 1)"
+          test -n "$JAR_PATH"
+          echo "path=$JAR_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Read mod version
+        id: mod_version
+        shell: bash
+        run: |
+          VERSION="$(awk -F= '$1 ~ /^[[:space:]]*mod_version[[:space:]]*$/ { gsub(/[[:space:]]/, "", $2); print $2 }' gradle.properties)"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Modrinth
+        uses: cloudnode-pro/modrinth-publish@v2
+        with:
+          token: ${{ secrets.MODRINTH_TOKEN }}
+          project: ${{ secrets.MODRINTH_PROJECT_ID }}
+          name: Force Chunk Loading ${{ steps.mod_version.outputs.version }}
+          version: ${{ steps.mod_version.outputs.version }}
+          changelog: ${{ inputs.changelog }}
+          loaders: fabric
+          game-versions: ${{ inputs.game_version }}
+          channel: ${{ inputs.release_type }}
+          files: ${{ steps.mod_jar.outputs.path }}

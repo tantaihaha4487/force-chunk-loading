@@ -1,0 +1,31 @@
+name: Sync Modrinth Description
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Update Modrinth project description
+        env:
+          MODRINTH_PROJECT_ID: ${{ secrets.MODRINTH_PROJECT_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -Rs '{body: .}' README.md |
+            curl --fail-with-body --silent --show-error \
+              --request PATCH \
+              --url "https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}" \
+              --header "Authorization: ${MODRINTH_TOKEN}" \
+              --header 'Content-Type: application/json' \
+              --header 'User-Agent: ForceChunkLoading-GitHubActions/1.0' \
+              --data-binary @-
