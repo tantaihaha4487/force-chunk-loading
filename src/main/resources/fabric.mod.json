@@ -4,19 +4,22 @@
   "version": "${version}",
 
   "name": "Force Chunk Loading",
-  "description": "A server-only, craftable Earth-textured player head that keeps its chunk loaded.",
+  "description": "A server-authoritative, craftable configurable-texture player head that keeps its chunk loaded.",
   "authors": ["Thanachot"],
   "contact": {},
 
   "license": "MIT",
 
-  "environment": "server",
+  "environment": "*",
   "mixins": [
     "force_chunk_loading.mixins.json"
   ],
   "entrypoints": {
     "main": [
       "com.tantaihaha.forcechunkloading.force_chunk_loading.ForceChunkLoading"
+    ],
+    "client": [
+      "com.tantaihaha.forcechunkloading.force_chunk_loading.ForceChunkLoadingClient"
     ]
   },
   "depends": {

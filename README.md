@@ -1,51 +1,76 @@
 # Force Chunk Loading
 
-A server-only Fabric mod for Minecraft 26.1.2 / Fabric Loader 0.19.3.
+Craft a configurable player head that keeps its chunk loaded. It works server-side with vanilla clients.
 
-## Behavior
+<p align="center">
+  <img src="assets/crafting.png" alt="Minecraft crafting preview" width="360">
+</p>
 
-- The recipe creates a vanilla `minecraft:player_head` named `Chunk load` with a static Earth texture.
-- The head is intentionally a vanilla block, so a client does **not** need this mod installed.
-- Placing the marked head force-loads the chunk containing it with `ServerLevel#setChunkForced`.
-- The location is persisted with vanilla `SavedData`, and force-loading is restored after a server restart.
-- Breaking the head removes the saved marker and unforces the chunk.
-- If non-player destruction is disabled, the server reconciles an explosion, creeper, piston, command, or other external removal on the next server tick by restoring the marker. If it is enabled, the marker is removed and its chunk is unforced.
+## Features
 
-The Earth texture is embedded as a vanilla player profile property; the client receives normal player-head block-entity data and does not need a custom renderer or registry entry.
+- Configurable player-head skin, recipe, particles, and sounds.
+- Chunk loading survives server restarts.
+- Marker heads are protected from non-player destruction by default.
+- Breaking a marker drops a reusable marker item.
+- No client mod is required.
+
+## Requirements
+
+| Minecraft | Fabric Loader | Fabric API | Java |
+| --- | --- | --- | --- |
+| `26.1.2` | `0.19.3+` | `0.155.2+26.1.2` | `25+` |
+
+## Installation
+
+1. Install Fabric Loader and Fabric API on the dedicated server.
+2. Put the `force_chunk_loading` JAR in the server's `mods` folder.
+3. Start the server once to create the config.
+4. Edit the config if needed, then restart the server.
+
+The client does not need this mod installed.
+
+## Use
+
+Craft and place the player head shown above. The chunk is force-loaded after successful placement, with an activation message, sound, and optional enchanted particles.
+
+Break the marker to deactivate it. In survival, the complete marker item drops and can be placed again. By default, explosions, pistons, commands, and other non-player changes restore the marker instead of removing it.
 
 ## Configuration
 
-On first dedicated-server start, the mod writes `config/force_chunk_loading.json`:
+<details>
+<summary>Show configuration</summary>
 
-```json
-{
-  "allowPlacement": true,
-  "placementPermissionLevel": 0,
-  "allowPlayerRemoval": true,
-  "allowNonPlayerRemoval": false,
-  "recipe": {
-    "enabled": true,
-    "pattern": ["OOO", "OEO", "OOO"],
-    "ingredients": {
-      "O": "minecraft:obsidian",
-      "E": "minecraft:ender_eye"
-    }
-  }
-}
+Edit this file while the server is stopped:
+
+```text
+config/force_chunk_loading.json
 ```
 
-`placementPermissionLevel` uses the Minecraft 26.1 permission levels: `0` allows all players, while `1`–`4` require progressively higher moderator/gamemaster/admin/owner command permission. Edit the file and restart the server; recipe changes are injected as a vanilla shaped recipe during the server data reload.
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `allowPlacement` | `true` | Allow marker placement. |
+| `placementPermissionLevel` | `0` | Required permission level, from `0` to `4`. |
+| `allowPlayerRemoval` | `true` | Allow players to break markers. |
+| `allowNonPlayerRemoval` | `false` | Let non-player changes remove markers permanently. |
+| `showEnchantedParticles` | `true` | Show particles around active markers. |
+| `sounds.enabled` | `true` | Enable activation/deactivation sounds. |
+| `sounds.activation` | `minecraft:entity.player.levelup` | Placement sound ID. |
+| `sounds.deactivation` | `minecraft:entity.enderman.teleport` | Removal sound ID. |
+| `head.texture` | Earth texture | Base64 value from `profile.properties[].value`. |
+| `recipe.enabled` | `true` | Enable the generated recipe. |
+| `recipe.pattern` | `DOD`, `OEO`, `DOD` | Up to three rows of three characters. |
+| `recipe.ingredients` | `D`, `O`, `E` | Maps characters to namespaced item IDs. |
 
-`allowPlayerRemoval` controls player breaking. `allowNonPlayerRemoval` controls destructive world changes such as explosions, creepers, pistons, and commands. The default is player-removable but protected from non-player removal.
+`placementPermissionLevel: 0` allows everyone. Levels `1`–`4` require higher Minecraft permissions.
 
-## Why no SQLite?
+Use a registered namespaced sound ID. Set `sounds.enabled` to `false` to keep actionbar messages but disable sounds.
 
-SQLite is unnecessary for this state: the data is a small set of world positions, is owned by each dimension, and must load/save with the Minecraft world lifecycle. `SavedData` is the native persistent store, avoids an extra driver/native file, and is durable across restarts.
+Change only `head.texture` to choose another skin. The command's custom name, lore, and head ID are not copied.
 
-## Build
+Restart the server after changing configuration.
 
-```bash
-./gradlew clean build
-```
+</details>
 
-The distributable JAR is written to `build/libs/`. Install it on the dedicated server with Fabric Loader and Fabric API; do not install it on clients.
+## License
+
+MIT. See [LICENSE](LICENSE).

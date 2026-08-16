@@ -12,18 +12,33 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ItemStackTemplate;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.ResolvableProfile;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.SkullBlockEntity;
@@ -31,7 +46,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.Collection;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
@@ -40,8 +56,8 @@ import java.util.WeakHashMap;
 public final class ChunkLoadService {
     private static final String MARKER_KEY = "force_chunk_loading";
     private static final String MARKER_VALUE = "chunk_load";
-    private static final String EARTH_TEXTURE = "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvYmRkZTU5NGRlYWQ4OGIzNWJjMjFhZDFhYjIzOGRjYWU0MTEyNTNlMzRhNTg1ZDkyNTI1OGNlNjc0YzY0MjYxNyJ9fX0=";
-    private static final UUID EARTH_PROFILE_ID = UUID.fromString("32715d6a-2c4d-4e2e-a3b5-64ca4f8a7f31");
+    private static final int PARTICLE_INTERVAL_TICKS = 5;
+    private static final int PARTICLE_COUNT = 2;
 
     private static final Map<ServerLevel, ChunkLoadData> DATA = new WeakHashMap<>();
 
@@ -75,7 +91,11 @@ public final class ChunkLoadService {
 
         PlayerBlockBreakEvents.AFTER.register((level, player, pos, state, blockEntity) -> {
             if (level instanceof ServerLevel serverLevel && isMarkerState(state)) {
+                boolean tracked = data(serverLevel).positions().contains(pos);
                 untrack(serverLevel, pos);
+                if (tracked && player instanceof ServerPlayer serverPlayer) {
+                    sendFeedback(serverPlayer, false);
+                }
             }
         });
 
@@ -86,13 +106,37 @@ public final class ChunkLoadService {
             return ForceChunkLoading.config().canPlace(player) ? InteractionResult.PASS : InteractionResult.FAIL;
         });
 
-        ServerTickEvents.END_LEVEL_TICK.register(ChunkLoadService::validateTrackedBlocks);
+        ServerTickEvents.END_LEVEL_TICK.register(level -> {
+            validateTrackedBlocks(level);
+            spawnMarkerParticles(level);
+        });
+
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (server.getTickCount() % 20 != 0) {
+                return;
+            }
+
+            RecipeHolder<ShapedRecipe> recipe = ChunkLoadRecipe.createHolder(ForceChunkLoading.LOGGER);
+            if (recipe == null) {
+                return;
+            }
+
+            for (var player : server.getPlayerList().getPlayers()) {
+                if (!player.getRecipeBook().contains(ChunkLoadRecipe.ID)
+                        && ChunkLoadRecipe.hasConfiguredIngredient(recipe, player)) {
+                    player.getRecipeBook().addRecipes(List.of(recipe), player);
+                }
+            }
+        });
     }
 
-    /** Called by the server-only BlockItem mixin after vanilla placement succeeds. */
-    public static void onPlaced(ServerLevel level, BlockPos position, ItemStack stack) {
+    /** Called by the server-authoritative BlockItem mixin after vanilla placement succeeds. */
+    public static void onPlaced(ServerLevel level, BlockPos position, ItemStack stack, ServerPlayer player) {
         if (isMarkerItem(stack) && isMarkerBlock(level, position)) {
             track(level, position);
+            if (player != null) {
+                sendFeedback(player, true);
+            }
         }
     }
 
@@ -102,6 +146,12 @@ public final class ChunkLoadService {
         return stack;
     }
 
+    public static void dropMarkerItem(ServerLevel level, BlockPos position, Entity breaker) {
+        if (breaker instanceof ServerPlayer || ForceChunkLoading.config().allowNonPlayerRemoval) {
+            Block.popResource(level, position, createMarkerStack());
+        }
+    }
+
     static ItemStackTemplate createMarkerTemplate() {
         return new ItemStackTemplate(Items.PLAYER_HEAD, markerComponents());
     }
@@ -109,9 +159,22 @@ public final class ChunkLoadService {
     private static DataComponentPatch markerComponents() {
         return DataComponentPatch.builder()
                 .set(DataComponents.CUSTOM_NAME, Component.literal("Chunk load"))
-                .set(DataComponents.PROFILE, earthProfile())
+                .set(DataComponents.PROFILE, configuredProfile())
                 .set(DataComponents.CUSTOM_DATA, CustomData.of(markerTag()))
                 .build();
+    }
+
+    private static ResolvableProfile configuredProfile() {
+        String texture = ForceChunkLoading.config().head.texture;
+        Multimap<String, Property> properties = ArrayListMultimap.create();
+        properties.put("textures", new Property("textures", texture));
+        UUID profileId = UUID.nameUUIDFromBytes(
+                (ForceChunkLoading.MOD_ID + ":" + texture).getBytes(StandardCharsets.UTF_8)
+        );
+        // The profile name is internal and must satisfy Minecraft's username rules;
+        // the visible item name remains the separate "Chunk load" custom name.
+        GameProfile profile = new GameProfile(profileId, "ChunkLoad", new PropertyMap(properties));
+        return ResolvableProfile.createResolved(profile);
     }
 
     public static boolean isMarkerItem(ItemStack stack) {
@@ -126,28 +189,16 @@ public final class ChunkLoadService {
         return isMarkerBlock(level, position, level.getBlockState(position), level.getBlockEntity(position));
     }
 
-    private static boolean isMarkerBlock(Level level, BlockPos position, BlockState state, BlockEntity blockEntity) {
+    public static boolean isMarkerBlock(Level level, BlockPos position, BlockState state, BlockEntity blockEntity) {
         if (!isMarkerState(state) || !(blockEntity instanceof SkullBlockEntity skull)) {
             return false;
         }
-        return hasEarthTexture(skull.getOwnerProfile());
+        CustomData customData = skull.components().get(DataComponents.CUSTOM_DATA);
+        return customData != null && MARKER_VALUE.equals(customData.copyTag().getStringOr(MARKER_KEY, ""));
     }
 
     private static boolean isMarkerState(BlockState state) {
         return state.is(Blocks.PLAYER_HEAD) || state.is(Blocks.PLAYER_WALL_HEAD);
-    }
-
-    private static boolean hasEarthTexture(ResolvableProfile profile) {
-        if (profile == null || profile.partialProfile() == null) {
-            return false;
-        }
-        Collection<Property> textures = profile.partialProfile().properties().get("textures");
-        for (Property texture : textures) {
-            if (EARTH_TEXTURE.equals(texture.value())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static void scanChunk(ServerLevel level, LevelChunk chunk) {
@@ -200,6 +251,70 @@ public final class ChunkLoadService {
         }
     }
 
+    private static void spawnMarkerParticles(ServerLevel level) {
+        if (!ForceChunkLoading.config().showEnchantedParticles
+                || level.getGameTime() % PARTICLE_INTERVAL_TICKS != 0) {
+            return;
+        }
+
+        for (BlockPos position : data(level).positions()) {
+            if (!isMarkerBlock(level, position)) {
+                continue;
+            }
+            level.sendParticles(
+                    ParticleTypes.ENCHANT,
+                    position.getX() + 0.5,
+                    position.getY() + 0.9,
+                    position.getZ() + 0.5,
+                    PARTICLE_COUNT,
+                    0.35,
+                    0.35,
+                    0.35,
+                    0.05
+            );
+        }
+    }
+
+    private static void sendFeedback(ServerPlayer player, boolean activated) {
+        sendActionbar(player, activated);
+
+        ForceChunkConfig.SoundConfig config = ForceChunkLoading.config().sounds;
+        if (!config.enabled) {
+            return;
+        }
+
+        String configuredId = activated ? config.activation : config.deactivation;
+        Identifier identifier = Identifier.tryParse(configuredId);
+        if (identifier == null) {
+            return;
+        }
+        SoundEvent soundEvent = BuiltInRegistries.SOUND_EVENT.getValue(identifier);
+        if (soundEvent == null) {
+            return;
+        }
+
+        player.connection.send(new ClientboundSoundPacket(
+                BuiltInRegistries.SOUND_EVENT.wrapAsHolder(soundEvent),
+                SoundSource.MASTER,
+                player.getX(),
+                player.getY(),
+                player.getZ(),
+                activated ? 0.6F : 1.0F,
+                activated ? 0.7F : 0.5F,
+                player.getRandom().nextLong()
+        ));
+    }
+
+    private static void sendActionbar(ServerPlayer player, boolean activated) {
+        int color = activated ? 0x55EA80 : 0xFF5555;
+        MutableComponent prefix = Component.literal("(i) ")
+                .withStyle(Style.EMPTY.withBold(true).withColor(TextColor.fromRgb(0xFFD700)));
+        MutableComponent name = Component.literal("Force Chunk Loading "
+                        + (activated ? "Activated" : "Deactivated"))
+                .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(color)));
+        player.sendOverlayMessage(prefix.append(name));
+    }
+
     private static void restoreMarker(ServerLevel level, BlockPos position) {
         BlockState state = Blocks.PLAYER_HEAD.defaultBlockState();
         level.setBlock(position, state, 3);
@@ -218,10 +333,4 @@ public final class ChunkLoadService {
         return tag;
     }
 
-    private static ResolvableProfile earthProfile() {
-        Multimap<String, Property> properties = ArrayListMultimap.create();
-        properties.put("textures", new Property("textures", EARTH_TEXTURE));
-        GameProfile profile = new GameProfile(EARTH_PROFILE_ID, "Earth", new PropertyMap(properties));
-        return ResolvableProfile.createResolved(profile);
-    }
 }

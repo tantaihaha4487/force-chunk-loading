@@ -37,6 +37,8 @@ public abstract class RecipeManagerMixin {
         if (configured != null) {
             allRecipes.add(configured);
         }
+        // RecipeMap.create retains Fabric's synchronized-recipe metadata, allowing the
+        // configured vanilla-shaped recipe to reach clients that support recipe sync.
         this.recipes = RecipeMap.create(allRecipes);
     }
 }

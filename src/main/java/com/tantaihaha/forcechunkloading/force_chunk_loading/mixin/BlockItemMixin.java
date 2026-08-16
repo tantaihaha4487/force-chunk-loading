@@ -2,6 +2,7 @@ package com.tantaihaha.forcechunkloading.force_chunk_loading.mixin;
 
 import com.tantaihaha.forcechunkloading.force_chunk_loading.ChunkLoadService;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -38,7 +39,8 @@ public abstract class BlockItemMixin {
             return;
         }
         if (context.getLevel() instanceof ServerLevel level) {
-            ChunkLoadService.onPlaced(level, context.getClickedPos(), marker);
+            ServerPlayer player = context.getPlayer() instanceof ServerPlayer serverPlayer ? serverPlayer : null;
+            ChunkLoadService.onPlaced(level, context.getClickedPos(), marker, player);
         }
     }
 }

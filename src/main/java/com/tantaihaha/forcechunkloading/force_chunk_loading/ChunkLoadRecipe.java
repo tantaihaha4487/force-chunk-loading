@@ -1,9 +1,11 @@
 package com.tantaihaha.forcechunkloading.force_chunk_loading;
 
+import net.fabricmc.fabric.api.recipe.v1.sync.RecipeSynchronization;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStackTemplate;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.CraftingBookCategory;
@@ -28,9 +30,19 @@ public final class ChunkLoadRecipe {
     private ChunkLoadRecipe() {
     }
 
+    /** Allows Fabric Recipe API clients to receive the configured runtime recipe. */
+    public static void initializeSynchronization() {
+        RecipeSynchronization.synchronizeRecipeSerializer(ShapedRecipe.SERIALIZER);
+    }
+
     public static RecipeHolder<ShapedRecipe> createHolder(Logger logger) {
         ShapedRecipe recipe = create(logger);
         return recipe == null ? null : new RecipeHolder<>(ID, recipe);
+    }
+
+    public static boolean hasConfiguredIngredient(RecipeHolder<ShapedRecipe> holder, ServerPlayer player) {
+        return player.getInventory().contains(stack -> holder.value().getIngredients().stream()
+                .anyMatch(ingredient -> ingredient.isPresent() && ingredient.get().test(stack)));
     }
 
     private static ShapedRecipe create(Logger logger) {

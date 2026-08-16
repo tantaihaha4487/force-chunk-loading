@@ -13,8 +13,8 @@ public final class ForceChunkLoading implements ModInitializer {
     @Override
     public void onInitialize() {
         config = ForceChunkConfig.load(LOGGER);
+        ChunkLoadRecipe.initializeSynchronization();
         ChunkLoadService.initialize();
-        LOGGER.info("Force Chunk Loading initialized (server-side vanilla player-head mode)");
     }
 
     public static ForceChunkConfig config() {

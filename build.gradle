@@ -10,6 +10,17 @@ base {
     archivesName = project.archives_base_name
 }
 
+loom {
+    splitEnvironmentSourceSets()
+
+    mods {
+        "force_chunk_loading" {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+}
+
 repositories {
     // Add repositories to retrieve artifacts from in here.
 }
