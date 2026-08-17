@@ -3,7 +3,7 @@
 Craft a configurable player head that keeps its chunk loaded. It works server-side with vanilla clients.
 
 <p align="center">
-  <img src="assets/crafting.png" alt="Minecraft crafting preview" width="360">
+  <img src="https://raw.githubusercontent.com/tantaihaha4487/force-chunk-loading/main/assets/crafting.png" alt="Minecraft crafting preview" width="360">
 </p>
 
 ## Features
