@@ -73,5 +73,6 @@ jobs:
           changelog: ${{ inputs.changelog }}
           loaders: fabric
           game-versions: ${{ inputs.game_version }}
+          environment: server_only_client_optional
           channel: ${{ inputs.release_type }}
           files: ${{ steps.mod_jar.outputs.path }}
