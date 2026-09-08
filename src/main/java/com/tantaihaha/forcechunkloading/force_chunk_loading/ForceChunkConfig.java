@@ -39,36 +39,66 @@ public final class ForceChunkConfig {
     public static ForceChunkConfig load(Logger logger) {
         Path path = configPath();
         try {
-            Files.createDirectories(path.getParent());
-            if (Files.notExists(path)) {
-                ForceChunkConfig config = new ForceChunkConfig();
-                config.save(path, logger);
-                return config;
-            }
-
-            try (Reader reader = Files.newBufferedReader(path)) {
-                JsonElement document = GSON.fromJson(reader, JsonElement.class);
-                if (document == null || !document.isJsonObject()) {
-                    throw new JsonParseException("configuration is empty");
-                }
-                boolean missingHeadConfig = !document.getAsJsonObject().has("head")
-                        || document.getAsJsonObject().get("head").isJsonNull();
-                boolean missingParticleConfig = !document.getAsJsonObject().has("showEnchantedParticles")
-                        || document.getAsJsonObject().get("showEnchantedParticles").isJsonNull();
-                boolean missingSoundConfig = !document.getAsJsonObject().has("sounds")
-                        || document.getAsJsonObject().get("sounds").isJsonNull();
-                ForceChunkConfig config = GSON.fromJson(document, ForceChunkConfig.class);
-                config.normalize();
-                if (missingHeadConfig || missingParticleConfig || missingSoundConfig) {
-                    config.save(path, logger);
-                }
-                return config;
-            }
+            return read(path, logger);
         } catch (IOException | RuntimeException exception) {
             logger.error("Could not read {}; using safe defaults", path, exception);
             ForceChunkConfig config = new ForceChunkConfig();
             config.normalize();
             return config;
+        }
+    }
+
+    /**
+     * Reads the current file for an explicit in-game reload. Unlike {@link #load(Logger)},
+     * a malformed file is reported to the caller so the active configuration can remain in
+     * place instead of silently switching to defaults.
+     */
+    public static ReloadResult reload(Logger logger) {
+        Path path = configPath();
+        try {
+            return new ReloadResult(read(path, logger), null);
+        } catch (IOException | RuntimeException exception) {
+            logger.error("Could not reload {}", path, exception);
+            return new ReloadResult(null, exception.getMessage() == null
+                    ? exception.getClass().getSimpleName()
+                    : exception.getMessage());
+        }
+    }
+
+    private static ForceChunkConfig read(Path path, Logger logger) throws IOException {
+        Files.createDirectories(path.getParent());
+        if (Files.notExists(path)) {
+            ForceChunkConfig config = new ForceChunkConfig();
+            config.save(path, logger);
+            return config;
+        }
+
+        try (Reader reader = Files.newBufferedReader(path)) {
+            JsonElement document = GSON.fromJson(reader, JsonElement.class);
+            if (document == null || !document.isJsonObject()) {
+                throw new JsonParseException("configuration is empty");
+            }
+            boolean missingHeadConfig = !document.getAsJsonObject().has("head")
+                    || document.getAsJsonObject().get("head").isJsonNull();
+            boolean missingParticleConfig = !document.getAsJsonObject().has("showEnchantedParticles")
+                    || document.getAsJsonObject().get("showEnchantedParticles").isJsonNull();
+            boolean missingSoundConfig = !document.getAsJsonObject().has("sounds")
+                    || document.getAsJsonObject().get("sounds").isJsonNull();
+            ForceChunkConfig config = GSON.fromJson(document, ForceChunkConfig.class);
+            if (config == null) {
+                throw new JsonParseException("configuration is empty");
+            }
+            config.normalize();
+            if (missingHeadConfig || missingParticleConfig || missingSoundConfig) {
+                config.save(path, logger);
+            }
+            return config;
+        }
+    }
+
+    public record ReloadResult(ForceChunkConfig config, String error) {
+        public boolean success() {
+            return config != null;
         }
     }
 

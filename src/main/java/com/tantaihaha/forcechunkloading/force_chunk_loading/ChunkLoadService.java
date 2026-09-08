@@ -8,9 +8,11 @@ import com.mojang.authlib.properties.PropertyMap;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerBlockEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLevelEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponentPatch;
@@ -49,8 +51,13 @@ import net.minecraft.world.level.ChunkPos;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Server-side lifecycle and force-loading logic. */
 public final class ChunkLoadService {
@@ -60,6 +67,24 @@ public final class ChunkLoadService {
     private static final int PARTICLE_COUNT = 2;
 
     private static final Map<ServerLevel, ChunkLoadData> DATA = new WeakHashMap<>();
+    private static final Map<ServerLevel, Set<Long>> PENDING_SCANS = new ConcurrentHashMap<>();
+    private static volatile boolean stopping;
+
+    public enum MarkerStatus {
+        ACTIVE,
+        ORPHAN,
+        UNLOADED
+    }
+
+    public enum RemoveResult {
+        REMOVED_MARKER,
+        REMOVED_ORPHAN,
+        NOT_TRACKED,
+        CHUNK_UNLOADED
+    }
+
+    public record MarkerInfo(BlockPos position, MarkerStatus status) {
+    }
 
     private ChunkLoadService() {
     }
@@ -67,20 +92,37 @@ public final class ChunkLoadService {
     public static void initialize() {
         ServerLevelEvents.LOAD.register((server, level) -> {
             ChunkLoadData data = data(level);
+            Set<Long> chunks = new HashSet<>();
             for (BlockPos position : data.positions()) {
-                level.setChunkForced(position.getX() >> 4, position.getZ() >> 4, true);
+                chunks.add(ChunkPos.containing(position).pack());
+            }
+            for (long packedChunk : chunks) {
+                updateChunkForced(level, ChunkPos.unpack(packedChunk), true);
             }
         });
-        ServerLevelEvents.UNLOAD.register((server, level) -> DATA.remove(level));
+        ServerLevelEvents.UNLOAD.register((server, level) -> {
+            DATA.remove(level);
+            PENDING_SCANS.remove(level);
+        });
+
+        ServerLifecycleEvents.SERVER_STOPPING.register(ChunkLoadService::onServerStopping);
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            stopping = false;
+            DATA.clear();
+            PENDING_SCANS.clear();
+        });
 
         ServerBlockEntityEvents.BLOCK_ENTITY_LOAD.register((blockEntity, level) -> {
-            if (isMarkerBlock(level, blockEntity.getBlockPos(), blockEntity.getBlockState(), blockEntity)
-                    && shouldDiscoverUntrackedMarkers(level, blockEntity.getBlockPos())) {
-                track(level, blockEntity.getBlockPos());
-            }
+            queueChunkScan(level, ChunkPos.containing(blockEntity.getBlockPos()));
         });
 
-        ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> scanChunk(level, chunk));
+        ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> queueChunkScan(level, chunk.getPos()));
+        ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> {
+            Set<Long> pending = PENDING_SCANS.get(level);
+            if (pending != null) {
+                pending.remove(chunk.getPos().pack());
+            }
+        });
 
         PlayerBlockBreakEvents.BEFORE.register((level, player, pos, state, blockEntity) -> {
             if (!(level instanceof ServerLevel serverLevel) || !isMarkerBlock(level, pos, state, blockEntity)) {
@@ -107,6 +149,7 @@ public final class ChunkLoadService {
         });
 
         ServerTickEvents.END_LEVEL_TICK.register(level -> {
+            processPendingScans(level);
             validateTrackedBlocks(level);
             spawnMarkerParticles(level);
         });
@@ -130,9 +173,88 @@ public final class ChunkLoadService {
         });
     }
 
+    private static void onServerStopping(MinecraftServer server) {
+        stopping = true;
+        for (ServerLevel level : server.getAllLevels()) {
+            Set<Long> chunks = new HashSet<>();
+            for (BlockPos position : data(level).positions()) {
+                chunks.add(ChunkPos.containing(position).pack());
+            }
+            for (long packedChunk : chunks) {
+                updateChunkForced(level, ChunkPos.unpack(packedChunk), false);
+            }
+            PENDING_SCANS.remove(level);
+        }
+    }
+
+    /** Returns a stable snapshot of this dimension's persisted marker records. */
+    public static List<MarkerInfo> inspectMarkers(ServerLevel level) {
+        List<MarkerInfo> result = new ArrayList<>();
+        for (BlockPos position : data(level).positions()) {
+            result.add(new MarkerInfo(position, markerStatus(level, position)));
+        }
+        result.sort(Comparator.comparingInt((MarkerInfo info) -> info.position().getX())
+                .thenComparingInt(info -> info.position().getY())
+                .thenComparingInt(info -> info.position().getZ()));
+        return result;
+    }
+
+    public static int pendingScanCount(ServerLevel level) {
+        Set<Long> pending = PENDING_SCANS.get(level);
+        return pending == null ? 0 : pending.size();
+    }
+
+    public static MarkerStatus markerStatus(ServerLevel level, BlockPos position) {
+        LevelChunk chunk = loadedChunk(level, ChunkPos.containing(position));
+        if (chunk == null) {
+            return MarkerStatus.UNLOADED;
+        }
+        return isMarkerBlock(level, position, chunk.getBlockState(position), chunk.getBlockEntity(position))
+                ? MarkerStatus.ACTIVE
+                : MarkerStatus.ORPHAN;
+    }
+
+    /**
+     * Checks a target placement without loading its chunk. A missing chunk is treated as
+     * unavailable so a placement cannot bypass the one-loader-per-chunk rule.
+     */
+    public static boolean canPlaceMarker(ServerLevel level, BlockPos position) {
+        ChunkPos target = ChunkPos.containing(position);
+        for (BlockPos tracked : data(level).positions()) {
+            if (ChunkPos.containing(tracked).equals(target)) {
+                return false;
+            }
+        }
+
+        LevelChunk chunk = loadedChunk(level, target);
+        return chunk != null && !containsMarker(chunk, level);
+    }
+
+    public static RemoveResult removeMarker(ServerLevel level, BlockPos position) {
+        LevelChunk chunk = loadedChunk(level, ChunkPos.containing(position));
+        if (chunk == null) {
+            return data(level).positions().contains(position)
+                    ? RemoveResult.CHUNK_UNLOADED
+                    : RemoveResult.NOT_TRACKED;
+        }
+
+        boolean marker = isMarkerBlock(level, position, chunk.getBlockState(position), chunk.getBlockEntity(position));
+        boolean tracked = data(level).positions().contains(position);
+        if (!tracked && !marker) {
+            return RemoveResult.NOT_TRACKED;
+        }
+        if (marker) {
+            level.removeBlock(position, false);
+        }
+        if (tracked) {
+            untrack(level, position);
+        }
+        return marker ? RemoveResult.REMOVED_MARKER : RemoveResult.REMOVED_ORPHAN;
+    }
+
     /** Called by the server-authoritative BlockItem mixin after vanilla placement succeeds. */
     public static void onPlaced(ServerLevel level, BlockPos position, ItemStack stack, ServerPlayer player) {
-        if (isMarkerItem(stack) && isMarkerBlock(level, position)) {
+        if (!stopping && isMarkerItem(stack) && isMarkerBlock(level, position)) {
             track(level, position);
             if (player != null) {
                 sendFeedback(player, true);
@@ -201,6 +323,30 @@ public final class ChunkLoadService {
         return state.is(Blocks.PLAYER_HEAD) || state.is(Blocks.PLAYER_WALL_HEAD);
     }
 
+    private static void queueChunkScan(ServerLevel level, ChunkPos chunk) {
+        if (stopping) {
+            return;
+        }
+        PENDING_SCANS.computeIfAbsent(level, ignored -> ConcurrentHashMap.newKeySet()).add(chunk.pack());
+    }
+
+    private static void processPendingScans(ServerLevel level) {
+        Set<Long> pending = PENDING_SCANS.get(level);
+        if (pending == null || pending.isEmpty() || stopping) {
+            return;
+        }
+
+        for (long packedChunk : new ArrayList<>(pending)) {
+            LevelChunk chunk = loadedChunk(level, ChunkPos.unpack(packedChunk));
+            if (chunk == null) {
+                continue;
+            }
+            pending.remove(packedChunk);
+            scanChunk(level, chunk);
+        }
+
+    }
+
     private static void scanChunk(ServerLevel level, LevelChunk chunk) {
         for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
             if (isMarkerBlock(level, blockEntity.getBlockPos(), blockEntity.getBlockState(), blockEntity)
@@ -219,10 +365,14 @@ public final class ChunkLoadService {
     }
 
     private static void track(ServerLevel level, BlockPos position) {
+        if (stopping) {
+            return;
+        }
         ChunkLoadData data = data(level);
-        data.add(position);
-        ChunkPos chunk = ChunkPos.containing(position);
-        level.setChunkForced(chunk.x(), chunk.z(), true);
+        if (data.add(position)) {
+            ChunkPos chunk = ChunkPos.containing(position);
+            updateChunkForced(level, chunk, true);
+        }
     }
 
     private static void untrack(ServerLevel level, BlockPos position) {
@@ -232,14 +382,15 @@ public final class ChunkLoadService {
         }
         ChunkPos chunk = ChunkPos.containing(position);
         if (data.positions().stream().noneMatch(other -> ChunkPos.containing(other).equals(chunk))) {
-            level.setChunkForced(chunk.x(), chunk.z(), false);
+            updateChunkForced(level, chunk, false);
         }
     }
 
     private static void validateTrackedBlocks(ServerLevel level) {
         ChunkLoadData data = data(level);
         for (BlockPos position : data.positions()) {
-            if (isMarkerBlock(level, position)) {
+            MarkerStatus status = markerStatus(level, position);
+            if (status == MarkerStatus.UNLOADED || status == MarkerStatus.ACTIVE) {
                 continue;
             }
 
@@ -258,7 +409,7 @@ public final class ChunkLoadService {
         }
 
         for (BlockPos position : data(level).positions()) {
-            if (!isMarkerBlock(level, position)) {
+            if (markerStatus(level, position) != MarkerStatus.ACTIVE) {
                 continue;
             }
             level.sendParticles(
@@ -324,7 +475,24 @@ public final class ChunkLoadService {
             blockEntity.setChanged();
         }
         ChunkPos chunk = ChunkPos.containing(position);
-        level.setChunkForced(chunk.x(), chunk.z(), true);
+        updateChunkForced(level, chunk, true);
+    }
+
+    private static boolean containsMarker(LevelChunk chunk, ServerLevel level) {
+        for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
+            if (isMarkerBlock(level, blockEntity.getBlockPos(), blockEntity.getBlockState(), blockEntity)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static LevelChunk loadedChunk(ServerLevel level, ChunkPos position) {
+        return level.getChunkSource().getChunkNow(position.x(), position.z());
+    }
+
+    private static boolean updateChunkForced(ServerLevel level, ChunkPos position, boolean forced) {
+        return level.getChunkSource().updateChunkForced(position, forced);
     }
 
     private static CompoundTag markerTag() {

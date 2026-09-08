@@ -18,7 +18,7 @@ Craft a configurable player head that keeps its chunk loaded. It works server-si
 
 | Minecraft | Fabric Loader | Fabric API | Java |
 | --- | --- | --- | --- |
-| `26.1.2` | `0.19.3+` | `0.155.2+26.1.2` | `25+` |
+| `26.2` | `0.19.3+` | `0.158.0+26.2` | `25+` |
 
 ## Installation
 
@@ -35,12 +35,14 @@ Craft and place the player head shown above. The chunk is force-loaded after suc
 
 Break the marker to deactivate it. In survival, the complete marker item drops and can be placed again. By default, explosions, pistons, commands, and other non-player changes restore the marker instead of removing it.
 
+Operators (permission level 2+) can use `/chunkloader status` for per-dimension marker and forced-chunk counts, `/chunkloader list [page]` to list markers, `/chunkloader orphans [page]` (or `/chunkloader check`) to inspect missing markers, `/chunkloader remove <dimension> <x> <y> <z>` to remove one marker without dropping an item, and `/chunkloader reload` to reload the config and recipe.
+
 ## Configuration
 
 <details>
 <summary>Show configuration</summary>
 
-Edit this file while the server is stopped:
+Edit this file, then run `/chunkloader reload`:
 
 ```text
 config/force_chunk_loading.json
@@ -67,7 +69,7 @@ Use a registered namespaced sound ID. Set `sounds.enabled` to `false` to keep ac
 
 Change only `head.texture` to choose another skin. The command's custom name, lore, and head ID are not copied.
 
-Restart the server after changing configuration.
+Use `/chunkloader reload` after changing configuration, or restart the server.
 
 </details>
 

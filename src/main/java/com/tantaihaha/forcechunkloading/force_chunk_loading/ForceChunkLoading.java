@@ -14,6 +14,7 @@ public final class ForceChunkLoading implements ModInitializer {
     public void onInitialize() {
         config = ForceChunkConfig.load(LOGGER);
         ChunkLoadRecipe.initializeSynchronization();
+        ChunkLoadCommand.initialize();
         ChunkLoadService.initialize();
     }
 
@@ -22,5 +23,14 @@ public final class ForceChunkLoading implements ModInitializer {
             config = ForceChunkConfig.load(LOGGER);
         }
         return config;
+    }
+
+    /** Reloads configuration without replacing a valid active configuration on failure. */
+    public static ForceChunkConfig.ReloadResult reloadConfig() {
+        ForceChunkConfig.ReloadResult result = ForceChunkConfig.reload(LOGGER);
+        if (result.success()) {
+            config = result.config();
+        }
+        return result;
     }
 }
